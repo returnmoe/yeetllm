@@ -39,6 +39,8 @@ grep -Fq '"--host",' src/yeetllm/commands.py \
   || fail "engine command is missing an explicit host"
 grep -Fq '"127.0.0.1",' src/yeetllm/commands.py \
   || fail "engine command is not loopback-only"
+grep -Fq "export PYTHONPATH=\"/opt/yeetllm:\${PYTHONPATH}\"" docker/yeetllm \
+  || fail "SSH CLI wrapper must establish its own Python module path"
 
 if find . -type f \( -name 'ssh_host_*_key' -o -name 'id_rsa' -o -name 'id_ed25519' \) \
     -print -quit | grep -q .; then
@@ -56,7 +58,8 @@ for directive in \
   'AllowStreamLocalForwarding no' \
   'X11Forwarding no' \
   'PermitTunnel no' \
-  'PermitUserEnvironment no'; do
+  'PermitUserEnvironment no' \
+  'SetEnv PYTHONPATH=/opt/yeetllm'; do
   grep -Fqx "${directive}" docker/sshd-yeetllm.conf \
     || fail "missing sshd directive: ${directive}"
 done

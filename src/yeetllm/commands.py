@@ -8,6 +8,8 @@ from pathlib import Path
 from yeetllm.cluster import ClusterInfo, cluster_environment
 from yeetllm.config import ModelConfig
 
+PERSISTENT_MODEL_DOWNLOAD_DIR = "/workspace/yeetllm/cache/huggingface/hub"
+
 
 @dataclass(frozen=True)
 class EngineLaunch:
@@ -33,6 +35,8 @@ def build_engine_launch(
         str(port),
         "--served-model-name",
         model.id,
+        "--download-dir",
+        PERSISTENT_MODEL_DOWNLOAD_DIR,
         "--tensor-parallel-size",
         str(model.tensor_parallel_size),
         "--pipeline-parallel-size",
@@ -112,8 +116,9 @@ def build_engine_launch(
         "PUBLIC_KEY",
     ):
         env.pop(name, None)
-    env.setdefault("HF_HOME", "/workspace/yeetllm/cache/huggingface")
-    env.setdefault("VLLM_CACHE_ROOT", "/workspace/yeetllm/cache/vllm")
+    env["HF_HOME"] = "/workspace/yeetllm/cache/huggingface"
+    env["HUGGINGFACE_HUB_CACHE"] = PERSISTENT_MODEL_DOWNLOAD_DIR
+    env["VLLM_CACHE_ROOT"] = "/workspace/yeetllm/cache/vllm"
     env.setdefault("PYTHONUNBUFFERED", "1")
     return EngineLaunch(argv=argv, env=env)
 

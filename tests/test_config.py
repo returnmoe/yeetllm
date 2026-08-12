@@ -324,6 +324,7 @@ def test_controlled_extra_argument_is_rejected() -> None:
         "--revi=unsafe",
         "--data-parallel-size=2",
         "--data-parallel-future-option=2",
+        "--download-dir=/tmp/ephemeral-models",
         "-tp2",
         "-dp2",
         "-asc2",

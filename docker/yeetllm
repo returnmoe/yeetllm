@@ -1,4 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
-exec python3 -m yeetllm "$@"
+# OpenSSH login sessions do not reliably retain the container-level PYTHONPATH.
+# Keep the administrative CLI self-contained instead of depending on sshd's
+# inherited environment.
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="/opt/yeetllm:${PYTHONPATH}"
+else
+  export PYTHONPATH=/opt/yeetllm
+fi
+
+exec /usr/bin/python3 -m yeetllm "$@"

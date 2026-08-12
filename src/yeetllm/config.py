@@ -37,6 +37,7 @@ BLOCKED_EXTRA_ARGS = {
     "--data-parallel-size-local",
     "--data-parallel-start-rank",
     "--device-ids",
+    "--download-dir",
     "--distributed-executor-backend",
     "--dtype",
     "--enable-lora",

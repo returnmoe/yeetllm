@@ -19,7 +19,7 @@ from yeetllm.cluster import (
     poll_coordinator,
     validate_cluster_ports,
 )
-from yeetllm.commands import build_engine_launch
+from yeetllm.commands import PERSISTENT_MODEL_DOWNLOAD_DIR, build_engine_launch
 from yeetllm.config import (
     YeetConfig,
     discover_gpu_count,
@@ -39,6 +39,7 @@ PERSISTENT_DIRECTORIES = (
     Path("/workspace/yeetllm/models"),
     Path("/workspace/yeetllm/quantized"),
 )
+STARTUP_PROGRESS_INTERVAL_SECONDS = 30.0
 
 
 class Supervisor:
@@ -274,6 +275,11 @@ class Supervisor:
             f"{','.join(map(str, model.gpus))}",
             flush=True,
         )
+        print(
+            f"[engine:{model.id}] model download/cache directory: "
+            f"{PERSISTENT_MODEL_DOWNLOAD_DIR}",
+            flush=True,
+        )
         self._set_engine_state(model.id, "starting")
         await managed.start()
         self._set_engine_state(model.id, "starting", pid=managed.pid)
@@ -283,7 +289,12 @@ class Supervisor:
 
     async def _wait_engine_ready(self, engine_id: str, process: ManagedProcess) -> None:
         engine = self.registry.engines[engine_id]
-        deadline = asyncio.get_running_loop().time() + self.config.cluster.startup_timeout_seconds
+        model = next(item for item in self.config.models if item.id == engine_id)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = started + self.config.cluster.startup_timeout_seconds
+        next_progress = started + STARTUP_PROGRESS_INTERVAL_SECONDS
+        probe_state = "backend not listening"
         timeout = httpx.Timeout(connect=2, read=5, write=5, pool=2)
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             while not self.stop_event.is_set():
@@ -299,6 +310,7 @@ class Supervisor:
                 try:
                     health = await client.get(f"{engine.backend_url}/health")
                     models = await client.get(f"{engine.backend_url}/v1/models")
+                    probe_state = f"health={health.status_code} catalog={models.status_code}"
                     if health.status_code == 200 and models.status_code == 200:
                         available = {
                             item.get("id")
@@ -307,10 +319,54 @@ class Supervisor:
                         }
                         if set(engine.model_ids).issubset(available):
                             return
-                except (httpx.HTTPError, ValueError, TypeError):
-                    pass
+                except httpx.ConnectError:
+                    probe_state = "backend not listening"
+                except httpx.TimeoutException:
+                    probe_state = "backend probe timed out"
+                except (httpx.HTTPError, ValueError, TypeError) as exc:
+                    probe_state = f"backend probe error ({type(exc).__name__})"
+                now = loop.time()
+                if now >= next_progress:
+                    self._report_startup_progress(
+                        engine_id,
+                        model.model,
+                        process,
+                        elapsed_seconds=now - started,
+                        probe_state=probe_state,
+                    )
+                    next_progress = now + STARTUP_PROGRESS_INTERVAL_SECONDS
                 await asyncio.sleep(2)
         raise RuntimeError("shutdown requested while engine was starting")
+
+    def _report_startup_progress(
+        self,
+        engine_id: str,
+        model_reference: str,
+        process: ManagedProcess,
+        *,
+        elapsed_seconds: float,
+        probe_state: str,
+    ) -> None:
+        cache_bytes, incomplete_files = model_cache_progress(model_reference)
+        cache_message = "cache=not detected"
+        if cache_bytes is not None:
+            cache_message = f"cache={format_bytes(cache_bytes)}"
+            if incomplete_files:
+                cache_message += f" incomplete_files={incomplete_files}"
+        message = (
+            f"elapsed={elapsed_seconds:.0f}s pid={process.pid} "
+            f"{probe_state} {cache_message}"
+        )
+        print(f"[engine:{engine_id}] startup progress: {message}", flush=True)
+        record = self.state.data["engines"][engine_id]
+        record["progress"] = {
+            "elapsed_seconds": round(elapsed_seconds),
+            "backend": probe_state,
+            "cache_bytes": cache_bytes,
+            "incomplete_files": incomplete_files,
+        }
+        record["updated_at"] = time.time()
+        self.state.touch()
 
     async def _start_router(self) -> None:
         command = [
@@ -657,6 +713,43 @@ def chunked(values: list[int], size: int) -> Iterable[list[int]]:
 async def wait_or_stop(event: asyncio.Event, seconds: float) -> None:
     with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(event.wait(), timeout=seconds)
+
+
+def model_cache_progress(model_reference: str) -> tuple[int | None, int]:
+    """Return locally downloaded blob bytes without contacting Hugging Face."""
+
+    candidate = Path(model_reference)
+    if candidate.exists() or "/" not in model_reference:
+        return None, 0
+    hub = Path(PERSISTENT_MODEL_DOWNLOAD_DIR)
+    blobs = hub / f"models--{model_reference.replace('/', '--')}" / "blobs"
+    if not blobs.is_dir():
+        return None, 0
+    total = 0
+    incomplete = 0
+    try:
+        paths = list(blobs.iterdir())
+    except OSError:
+        return None, 0
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
+            total += path.stat().st_size
+            if path.name.endswith(".incomplete"):
+                incomplete += 1
+        except OSError:
+            continue
+    return total, incomplete
+
+
+def format_bytes(value: int) -> str:
+    amount = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024 or unit == "TiB":
+            return f"{amount:.1f}{unit}"
+        amount /= 1024
+    raise AssertionError("unreachable")
 
 
 def sanitized_environment() -> dict[str, str]:

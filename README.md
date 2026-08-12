@@ -285,6 +285,21 @@ Model engines and the router run as the unprivileged `vllm` account provided by
 the official base image. sshd runs as root because root is the intended
 administrator for the disposable Pod.
 
+Model repositories are downloaded explicitly with vLLM's `--download-dir` to:
+
+```text
+/workspace/yeetllm/cache/huggingface/hub
+```
+
+YeetLLM also pins `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, and `VLLM_CACHE_ROOT` to
+their `/workspace/yeetllm/cache` locations for every engine. This prevents an
+engine from silently filling the image's smaller ephemeral root filesystem.
+During startup, upstream vLLM/download output is prefixed with the engine ID and
+sent to container stdout. An additional progress record is emitted every 30
+seconds with elapsed time, engine PID, backend probe state, downloaded cache
+bytes, and the number of incomplete cache files. The same snapshot appears in
+`yeetllm status --json`.
+
 ## RunPod deployment
 
 1. Choose the YeetLLM image and require CUDA 13.0 in the template's CUDA

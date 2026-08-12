@@ -70,6 +70,13 @@ def test_engine_command_is_argv_and_preserves_lora_id(
     )
     assert launch.argv[:3] == ["vllm", "serve", "Qwen/Qwen3-32B"]
     assert launch.env["CUDA_VISIBLE_DEVICES"] == "2,3"
+    assert launch.argv[launch.argv.index("--download-dir") + 1] == (
+        "/workspace/yeetllm/cache/huggingface/hub"
+    )
+    assert launch.env["HF_HOME"] == "/workspace/yeetllm/cache/huggingface"
+    assert launch.env["HUGGINGFACE_HUB_CACHE"] == (
+        "/workspace/yeetllm/cache/huggingface/hub"
+    )
     assert launch.argv[launch.argv.index("--host") + 1] == "127.0.0.1"
     lora_index = launch.argv.index("--lora-modules")
     modules = [json.loads(value) for value in launch.argv[lora_index + 1 : lora_index + 3]]

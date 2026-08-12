@@ -108,6 +108,36 @@ done
 [[ "${ssh_result}" == "0" ]] \
   || { echo "public-key-only root SSH smoke test failed" >&2; exit 1; }
 
+ssh_pythonpath="$(
+  ssh \
+    -i "${ssh_temp}/client_key" \
+    -p "${ssh_port}" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=2 \
+    -o IdentitiesOnly=yes \
+    -o LogLevel=ERROR \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    root@127.0.0.1 'printf %s "${PYTHONPATH:-}"' 2>/dev/null
+)"
+[[ "${ssh_pythonpath}" == "/opt/yeetllm" ]] \
+  || { echo "SSH session has unexpected PYTHONPATH: ${ssh_pythonpath}" >&2; exit 1; }
+
+ssh_cli_result="$(
+  ssh \
+    -i "${ssh_temp}/client_key" \
+    -p "${ssh_port}" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=2 \
+    -o IdentitiesOnly=yes \
+    -o LogLevel=ERROR \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    root@127.0.0.1 'env -u PYTHONPATH /usr/local/bin/yeetllm --version' 2>/dev/null
+)"
+[[ "${ssh_cli_result}" == YeetLLM* ]] \
+  || { echo "YeetLLM CLI failed in a clean SSH environment: ${ssh_cli_result}" >&2; exit 1; }
+
 docker rm -f "${ssh_container}" >/dev/null
 ssh_container=""
 cleanup_ssh_test

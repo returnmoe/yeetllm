@@ -64,8 +64,38 @@ class ManagedProcess:
         await self._finish_readers()
 
     async def _read(self, stream: asyncio.StreamReader) -> None:
-        while line := await stream.readline():
-            print(f"[{self.name}] {line.decode(errors='replace').rstrip()}", flush=True)
+        # tqdm and Hugging Face download progress use carriage returns rather
+        # than newlines. StreamReader.readline() can therefore accumulate past
+        # its configured limit, terminate this reader task, and hide all later
+        # vLLM output. Read bounded chunks and frame both line conventions.
+        pending = bytearray()
+        while chunk := await stream.read(64 * 1024):
+            pending.extend(chunk)
+            self._emit_complete_lines(pending)
+            while len(pending) > 64 * 1024:
+                self._emit_log(bytes(pending[: 64 * 1024]))
+                del pending[: 64 * 1024]
+        if pending:
+            self._emit_log(bytes(pending))
+
+    def _emit_complete_lines(self, pending: bytearray) -> None:
+        while True:
+            newline = pending.find(b"\n")
+            carriage_return = pending.find(b"\r")
+            positions = [position for position in (newline, carriage_return) if position >= 0]
+            if not positions:
+                return
+            boundary = min(positions)
+            line = bytes(pending[:boundary])
+            delimiter = pending[boundary]
+            del pending[: boundary + 1]
+            if delimiter == ord("\r") and pending[:1] == b"\n":
+                del pending[:1]
+            if line:
+                self._emit_log(line)
+
+    def _emit_log(self, line: bytes) -> None:
+        print(f"[{self.name}] {line.decode(errors='replace')}", flush=True)
 
     async def _finish_readers(self) -> None:
         if self.readers:
