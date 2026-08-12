@@ -53,7 +53,7 @@ fi
 '
 
 entrypoint="$(docker image inspect "${image}" --format '{{json .Config.Entrypoint}}')"
-[[ "${entrypoint}" == '["/usr/bin/tini","--","/usr/local/bin/yeetllm-entrypoint"]' ]] \
+[[ "${entrypoint}" == '["/usr/bin/tini","-s","--","/usr/local/bin/yeetllm-entrypoint"]' ]] \
   || { echo "unexpected entrypoint: ${entrypoint}" >&2; exit 1; }
 
 ssh_temp="$(mktemp -d)"

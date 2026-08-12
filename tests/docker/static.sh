@@ -10,7 +10,8 @@ grep -Eq '^EXPOSE 22$' Dockerfile || fail "Dockerfile must expose SSH"
 if grep -Eq '^EXPOSE .*(8000|810[0-9])' Dockerfile; then
   fail "inference HTTP ports must not be exposed"
 fi
-grep -Fq '"/usr/bin/tini", "--"' Dockerfile || fail "tini must be PID 1"
+grep -Fq '"/usr/bin/tini", "-s", "--"' Dockerfile \
+  || fail "tini must be the image init and register as a subreaper"
 grep -Fq 'VLLM_IMAGE=vllm/vllm-openai:v0.27.0@sha256:' Dockerfile \
   || fail "official vLLM base must be pinned by digest"
 grep -Fq 'ai.yeetllm.vllm.provenance="official-vllm-image"' Dockerfile \

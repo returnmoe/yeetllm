@@ -28,7 +28,7 @@ from yeetllm.config import (
     normalized_config_hash,
     validate_runtime,
 )
-from yeetllm.processes import ManagedProcess
+from yeetllm.processes import ManagedProcess, service_path_writable
 from yeetllm.registry import Registry, build_registry
 from yeetllm.ssh import SSHLaunch, prepare_ssh
 from yeetllm.state import DEFAULT_STATE_PATH, StateStore
@@ -112,7 +112,27 @@ class Supervisor:
             except KeyError:
                 return
             for directory in PERSISTENT_DIRECTORIES:
-                os.chown(directory, account.pw_uid, account.pw_gid)
+                if service_path_writable(directory):
+                    continue
+                with contextlib.suppress(OSError):
+                    os.chown(directory, account.pw_uid, account.pw_gid)
+                    os.chmod(directory, 0o755)  # noqa: S103 - service-owned data directory
+                if service_path_writable(directory):
+                    continue
+                # Matches the entrypoint's narrow root-squashed-volume fallback.
+                with contextlib.suppress(OSError):
+                    os.chmod(directory, 0o777)  # noqa: S103 - root-squashed mount fallback
+                if service_path_writable(directory):
+                    print(
+                        f"[yeetllm] WARNING: {directory} rejects chown; using mode "
+                        "0777 for mounted-volume compatibility",
+                        flush=True,
+                    )
+                    continue
+                raise PermissionError(
+                    f"{directory} is not writable by the vllm service user and "
+                    "its mounted filesystem rejects ownership/mode repair"
+                )
 
     def _initialize_state(self) -> None:
         role = "primary" if self.cluster.primary else "worker"

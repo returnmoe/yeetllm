@@ -5,6 +5,7 @@ import contextlib
 import os
 import pwd
 import signal
+import subprocess
 from dataclasses import dataclass, field
 
 
@@ -119,3 +120,16 @@ def service_argv(argv: list[str]) -> list[str]:
         "--",
         *argv,
     ]
+
+
+def service_path_writable(path: os.PathLike[str] | str) -> bool:
+    """Check path write access as the actual engine service account."""
+
+    result = subprocess.run(  # noqa: S603 - fixed argv, never a shell
+        service_argv(["/usr/bin/test", "-w", os.fspath(path)]),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0

@@ -91,5 +91,7 @@ EXPOSE 22
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60m --retries=3 \
     CMD ["/usr/local/bin/yeetllm-healthcheck"]
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/yeetllm-entrypoint"]
+# RunPod may place its own process above the image entrypoint. Subreaper mode
+# preserves Tini's zombie-reaping guarantees whether it is PID 1 or nested.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/yeetllm-entrypoint"]
 CMD ["yeetllm", "serve"]

@@ -723,9 +723,12 @@ marked failed immediately, router requests for its IDs receive a structured 503,
 and global readiness fails. YeetLLM does not enter an automatic restart loop.
 The router and detected-key SSH service remain available for debugging.
 
-`tini` is PID 1. The Python supervisor launches children in separate process
-groups, prefixes their stdout/stderr, forwards shutdown, waits a grace period,
-then terminates stragglers. No systemd is present.
+`tini` is the image init and registers as a child subreaper. It is PID 1 under
+ordinary Docker; subreaper mode preserves zombie reaping when RunPod inserts a
+platform wrapper above the image entrypoint. The Python supervisor launches
+children in separate process groups, prefixes their stdout/stderr, forwards
+shutdown, waits a grace period, then terminates stragglers. No systemd is
+present.
 
 The Docker health check verifies the supervisor heartbeat/phase, every required
 engine process, router readiness, and sshd process/configuration when SSH was

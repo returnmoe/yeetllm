@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 import yeetllm.supervisor
+from yeetllm.cluster import ClusterInfo
 from yeetllm.processes import ManagedProcess
-from yeetllm.supervisor import format_bytes, model_cache_progress, sanitized_environment
+from yeetllm.supervisor import Supervisor, format_bytes, model_cache_progress, sanitized_environment
 
 
 @pytest.mark.asyncio
@@ -71,3 +74,42 @@ def test_model_cache_progress_counts_completed_and_partial_blobs(
 
     assert model_cache_progress("org/model") == (17, 1)
     assert format_bytes(1024) == "1.0KiB"
+
+
+def test_prepare_directories_handles_root_squashed_volume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    persistent = tmp_path / "workspace" / "cache"
+    modes: list[int] = []
+    supervisor = Supervisor(
+        config_factory(),
+        state_path=tmp_path / "run" / "state.json",
+        cluster=ClusterInfo(enabled=False, role="primary"),
+        gpu_count=1,
+    )
+    monkeypatch.setattr(yeetllm.supervisor, "PERSISTENT_DIRECTORIES", (persistent,))
+    monkeypatch.setattr(yeetllm.supervisor.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        "pwd.getpwnam", lambda _: SimpleNamespace(pw_uid=2000, pw_gid=2000)
+    )
+
+    def reject_chown(*_: object) -> None:
+        raise PermissionError("root-squashed")
+
+    def record_chmod(_: object, mode: int) -> None:
+        modes.append(mode)
+
+    monkeypatch.setattr(yeetllm.supervisor.os, "chown", reject_chown)
+    monkeypatch.setattr(yeetllm.supervisor.os, "chmod", record_chmod)
+    monkeypatch.setattr(
+        yeetllm.supervisor,
+        "service_path_writable",
+        lambda _: bool(modes and modes[-1] == 0o777),
+    )
+
+    supervisor._prepare_directories()
+
+    assert persistent.is_dir()
+    assert modes == [0o777]

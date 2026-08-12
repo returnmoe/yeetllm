@@ -33,7 +33,7 @@ else:
         raise SystemExit("image inspection did not contain linux/amd64 configuration")
     config = platform["config"]
 
-expected_entrypoint = ["/usr/bin/tini", "--", "/usr/local/bin/yeetllm-entrypoint"]
+expected_entrypoint = ["/usr/bin/tini", "-s", "--", "/usr/local/bin/yeetllm-entrypoint"]
 expected_cmd = ["yeetllm", "serve"]
 if config.get("Entrypoint") != expected_entrypoint:
     raise SystemExit(f"unexpected entrypoint: {config.get('Entrypoint')!r}")

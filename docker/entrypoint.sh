@@ -3,17 +3,69 @@ set -Eeuo pipefail
 
 umask 022
 
+vllm_uid="$(id -u vllm)"
+vllm_gid="$(id -g vllm)"
+
+as_vllm() {
+  /usr/bin/setpriv \
+    "--reuid=${vllm_uid}" \
+    "--regid=${vllm_gid}" \
+    --init-groups \
+    --no-new-privs \
+    --bounding-set=-all \
+    --inh-caps=-all \
+    --ambient-caps=-all \
+    -- "$@"
+}
+
+prepare_persistent_directory() {
+  local directory="$1"
+
+  # Creating as the service account is the cleanest path on ordinary volumes
+  # and on mounts where root is mapped to an anonymous NFS identity.
+  if as_vllm /usr/bin/mkdir -p -- "${directory}" 2>/dev/null \
+    && as_vllm /usr/bin/chmod 0755 -- "${directory}" 2>/dev/null; then
+    return
+  fi
+
+  /usr/bin/mkdir -p -- "${directory}"
+  if as_vllm /usr/bin/test -w "${directory}"; then
+    return
+  fi
+
+  # Local Pod volumes normally permit ownership changes.
+  if /usr/bin/chown "${vllm_uid}:${vllm_gid}" -- "${directory}" 2>/dev/null \
+    && /usr/bin/chmod 0755 -- "${directory}" 2>/dev/null \
+    && as_vllm /usr/bin/test -w "${directory}"; then
+    return
+  fi
+
+  # Some RunPod/network filesystems root-squash chown. Restrict this fallback
+  # to YeetLLM's four data directories and prove service-user access afterward.
+  if /usr/bin/chmod 0777 -- "${directory}" 2>/dev/null \
+    && as_vllm /usr/bin/test -w "${directory}"; then
+    echo "[yeetllm] WARNING: ${directory} rejects chown; using mode 0777 for mounted-volume compatibility"
+    return
+  fi
+
+  echo "[yeetllm] ERROR: ${directory} is not writable by the vllm service user and its mounted filesystem rejects repair" >&2
+  /usr/bin/stat -c '[yeetllm] path=%n owner=%u:%g mode=%a filesystem=%m' -- "${directory}" >&2 || true
+  exit 1
+}
+
 install -d -m 0755 /run/sshd /run/yeetllm
 if ! getent passwd sshd >/dev/null; then
   /usr/sbin/useradd --system --no-create-home --home-dir /run/sshd \
     --shell /usr/sbin/nologin sshd
 fi
 
-install -d -m 0755 -o vllm -g root \
+for directory in \
   /workspace/yeetllm/cache/huggingface \
   /workspace/yeetllm/cache/vllm \
   /workspace/yeetllm/models \
-  /workspace/yeetllm/quantized
+  /workspace/yeetllm/quantized; do
+  prepare_persistent_directory "${directory}"
+done
 
 echo "[yeetllm] base=vllm/${YEETLLM_VLLM_VERSION:-unknown} expected_cuda=${YEETLLM_EXPECTED_CUDA:-unknown}"
 if command -v nvidia-smi >/dev/null 2>&1; then
