@@ -135,6 +135,11 @@ into a shell command. On one node vLLM uses its native multiprocessing path.
 `tensor_parallel_size × pipeline_parallel_size` must match the allocated GPU
 count (or the total count across nodes in an Instant Cluster).
 
+For a concrete two-GPU DeepSeek V4 example, see
+[`examples/deepseek-v4-flash-abliterated.yaml`](examples/deepseek-v4-flash-abliterated.yaml).
+It targets two 96 GB RTX Pro 6000 Blackwell GPUs and leaves the checkpoint's
+mixed FP4/FP8 format on vLLM's metadata-driven `quantization: auto` path.
+
 ## LoRA adapters
 
 Static LoRA loading is enabled per base engine:
@@ -307,11 +312,31 @@ appear until redeploy; inspect container logs for YeetLLM's selected key source.
 
 ### RunPod CLI example
 
-The following script uses the current `runpodctl pod create` interface, fetches
-the YAML from `CONFIG_URL`, requests RunPod-managed SSH setup, exposes only
-`22/tcp`, and also passes the same public key through `SSH_PUBLIC_KEY`. No
-interactive Pod setup or pre-seeded configuration file is required. The network
-volume persists model caches and the validated downloaded configuration.
+For a basic one-GPU deployment, register your SSH key once:
+
+```bash
+runpodctl ssh add-key --key-file "$HOME/.ssh/id_ed25519.pub"
+```
+
+Then create the Pod with the development image and the repository's prefilled
+one-GPU configuration:
+
+```bash
+runpodctl pod create --name yeetllm --image ghcr.io/returnmoe/yeetllm:development --gpu-id "NVIDIA GeForce RTX 4090" --gpu-count 1 --cloud-type SECURE --min-cuda-version 13.0 --container-disk-in-gb 30 --volume-in-gb 100 --volume-mount-path /workspace --ports 22/tcp --env '{"YEETLLM_CONFIG_URL":"https://raw.githubusercontent.com/returnmoe/yeetllm/development/config.example.yaml"}' --ssh=true
+```
+
+That is the complete create command: it exposes only SSH, downloads the YAML at
+startup, and starts sshd only if RunPod actually injects the registered public
+key. Substitute another value from `runpodctl gpu list` if the prefilled GPU is
+unavailable. Open the Pod's **Logs** pane in the RunPod Console to see the
+runtime-generated SSH host public keys and SHA256 fingerprints.
+
+The following more defensive script uses the same `runpodctl pod create`
+interface, fetches the YAML from `CONFIG_URL`, requests RunPod-managed SSH
+setup, exposes only `22/tcp`, and also passes the same public key through
+`SSH_PUBLIC_KEY`. No interactive Pod setup or pre-seeded configuration file is
+required. The network volume persists model caches and the validated downloaded
+configuration.
 
 ```bash
 #!/usr/bin/env bash
