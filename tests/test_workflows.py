@@ -33,3 +33,33 @@ def test_gpu_workflow_does_not_interpolate_dispatch_inputs_into_shell() -> None:
     assert "^ghcr\\.io/returnmoe/yeetllm" in profile["run"]
     assert "^/opt/yeetllm-gpu-configs/" in profile["run"]
     assert "realpath -e" in profile["run"]
+
+
+def test_ci_does_not_materialize_the_full_cuda_image() -> None:
+    workflow = load_workflow("ci.yml")
+    steps = workflow["jobs"]["image-graph"]["steps"]
+    commands = "\n".join(step.get("run", "") for step in steps)
+
+    assert "docker buildx build --check ." in commands
+    assert "--target runtime-tools" in commands
+    assert "image.output=type=cacheonly" not in commands
+
+
+def test_image_publication_reclaims_runner_disk_before_buildx() -> None:
+    for workflow_name in ("development.yml", "release.yml"):
+        workflow = load_workflow(workflow_name)
+        job_name = "publish" if workflow_name == "development.yml" else "build"
+        steps = workflow["jobs"][job_name]["steps"]
+        cleanup_index = next(
+            index
+            for index, step in enumerate(steps)
+            if "free-build-disk.sh 30" in step.get("run", "")
+        )
+        buildx_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("uses", "").startswith("docker/setup-buildx-action@")
+        )
+
+        assert cleanup_index < buildx_index
+        assert any(step.get("if") == "always()" for step in steps)
