@@ -105,6 +105,8 @@ def build_engine_launch(
     env["CUDA_VISIBLE_DEVICES"] = ",".join(str(index) for index in model.gpus)
     env.pop("VLLM_ALLOW_RUNTIME_LORA_UPDATING", None)
     for name in (
+        "YEETLLM_CONFIG_URL",
+        "YEETLLM_CONFIG_SHA256",
         "YEETLLM_SSH_AUTHORIZED_KEYS",
         "SSH_PUBLIC_KEY",
         "PUBLIC_KEY",

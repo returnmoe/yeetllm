@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
 import subprocess
+import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urljoin, urlsplit
 
+import httpx
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 DEFAULT_CONFIG_PATH = Path("/workspace/yeetllm/config.yaml")
+MAX_REMOTE_CONFIG_BYTES = 1024 * 1024
+MAX_REMOTE_CONFIG_REDIRECTS = 5
 MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$")
 BLOCKED_EXTRA_ARGS = {
     "-n",
@@ -332,25 +339,55 @@ def config_path(env: Mapping[str, str] | None = None) -> Path:
 def load_config(path: Path | None = None, env: Mapping[str, str] | None = None) -> YeetConfig:
     source = os.environ if env is None else env
     selected = config_path(source) if path is None else path
-    try:
-        raw = yaml.load(
-            selected.read_text(encoding="utf-8"),
-            Loader=UniqueKeySafeLoader,  # noqa: S506 - subclasses yaml.SafeLoader
+    remote_url = source.get("YEETLLM_CONFIG_URL", "").strip() if path is None else ""
+    expected_sha256 = source.get("YEETLLM_CONFIG_SHA256", "").strip() if path is None else ""
+
+    if expected_sha256 and not remote_url:
+        raise RuntimeValidationError(
+            "YEETLLM_CONFIG_SHA256 requires YEETLLM_CONFIG_URL"
         )
+    if remote_url:
+        payload = fetch_remote_config(remote_url, expected_sha256=expected_sha256)
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeValidationError(
+                "configuration fetched from YEETLLM_CONFIG_URL is not UTF-8"
+            ) from exc
+        config = parse_config_text(text, source, "YEETLLM_CONFIG_URL")
+        persist_remote_config(selected, payload)
+        print(f"[yeetllm] fetched remote configuration via HTTPS -> {selected}", flush=True)
+        return config
+
+    try:
+        text = selected.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise RuntimeValidationError(f"configuration file not found: {selected}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeValidationError(
+            f"could not read configuration file {selected}: {exc}"
+        ) from exc
+    return parse_config_text(text, source, str(selected))
+
+
+def parse_config_text(text: str, env: Mapping[str, str], label: str) -> YeetConfig:
+    try:
+        raw = yaml.load(
+            text,
+            Loader=UniqueKeySafeLoader,  # noqa: S506 - subclasses yaml.SafeLoader
+        )
     except yaml.YAMLError as exc:
-        raise RuntimeValidationError(f"invalid YAML in {selected}: {exc}") from exc
+        raise RuntimeValidationError(f"invalid YAML in {label}: {exc}") from exc
     if not isinstance(raw, dict):
         raise RuntimeValidationError("configuration root must be a YAML mapping")
 
     data = dict(raw)
     ssh = dict(data.get("ssh") or {})
-    if "YEETLLM_SSH_ENABLE" in source:
-        ssh["enable"] = parse_bool_or_auto(source["YEETLLM_SSH_ENABLE"])
-    if "YEETLLM_SSH_PORT" in source:
+    if "YEETLLM_SSH_ENABLE" in env:
+        ssh["enable"] = parse_bool_or_auto(env["YEETLLM_SSH_ENABLE"])
+    if "YEETLLM_SSH_PORT" in env:
         try:
-            ssh["port"] = int(source["YEETLLM_SSH_PORT"])
+            ssh["port"] = int(env["YEETLLM_SSH_PORT"])
         except ValueError as exc:
             raise RuntimeValidationError("YEETLLM_SSH_PORT must be an integer") from exc
     if ssh:
@@ -359,6 +396,127 @@ def load_config(path: Path | None = None, env: Mapping[str, str] | None = None) 
         return YeetConfig.model_validate(data)
     except ValidationError as exc:
         raise RuntimeValidationError(str(exc)) from exc
+
+
+def fetch_remote_config(url: str, *, expected_sha256: str = "") -> bytes:
+    current_url = url.strip()
+    initial_host = validate_config_url(current_url)
+    normalized_digest = expected_sha256.strip().lower()
+    if normalized_digest and not re.fullmatch(r"[0-9a-f]{64}", normalized_digest):
+        raise RuntimeValidationError(
+            "YEETLLM_CONFIG_SHA256 must be exactly 64 hexadecimal characters"
+        )
+
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+            for redirect_count in range(MAX_REMOTE_CONFIG_REDIRECTS + 1):
+                validate_config_url(current_url)
+                with client.stream(
+                    "GET",
+                    current_url,
+                    headers={"Accept": "application/yaml, text/yaml, text/plain, */*"},
+                ) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise RuntimeValidationError(
+                                f"configuration fetch from {initial_host} returned a redirect "
+                                "without a Location header"
+                            )
+                        if redirect_count == MAX_REMOTE_CONFIG_REDIRECTS:
+                            raise RuntimeValidationError(
+                                f"configuration fetch from {initial_host} exceeded "
+                                f"{MAX_REMOTE_CONFIG_REDIRECTS} redirects"
+                            )
+                        current_url = urljoin(str(response.url), location)
+                        continue
+                    if response.status_code < 200 or response.status_code >= 300:
+                        raise RuntimeValidationError(
+                            f"configuration fetch from {initial_host} returned HTTP "
+                            f"{response.status_code}"
+                        )
+                    content_length = response.headers.get("content-length")
+                    if (
+                        content_length
+                        and content_length.isdigit()
+                        and int(content_length) > MAX_REMOTE_CONFIG_BYTES
+                    ):
+                        raise RuntimeValidationError(
+                            "remote configuration exceeds the 1 MiB size limit"
+                        )
+                    payload = bytearray()
+                    for chunk in response.iter_bytes():
+                        payload.extend(chunk)
+                        if len(payload) > MAX_REMOTE_CONFIG_BYTES:
+                            raise RuntimeValidationError(
+                                "remote configuration exceeds the 1 MiB size limit"
+                            )
+                    if not payload:
+                        raise RuntimeValidationError("remote configuration is empty")
+                    downloaded = bytes(payload)
+                    break
+            else:  # pragma: no cover - loop always breaks or raises at its bound
+                raise RuntimeValidationError("remote configuration redirect handling failed")
+    except RuntimeValidationError:
+        raise
+    except httpx.TimeoutException as exc:
+        raise RuntimeValidationError(
+            f"configuration fetch from {initial_host} timed out"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeValidationError(
+            f"configuration fetch from {initial_host} failed ({type(exc).__name__})"
+        ) from exc
+
+    if normalized_digest:
+        actual_digest = hashlib.sha256(downloaded).hexdigest()
+        if not hmac.compare_digest(actual_digest, normalized_digest):
+            raise RuntimeValidationError("remote configuration SHA256 does not match")
+    return downloaded
+
+
+def validate_config_url(url: str) -> str:
+    if len(url) > 8192:
+        raise RuntimeValidationError("YEETLLM_CONFIG_URL is too long")
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() != "https":
+        raise RuntimeValidationError("YEETLLM_CONFIG_URL must use HTTPS")
+    if not parsed.hostname:
+        raise RuntimeValidationError("YEETLLM_CONFIG_URL must include a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise RuntimeValidationError(
+            "YEETLLM_CONFIG_URL must not contain embedded credentials; use a signed HTTPS URL"
+        )
+    return parsed.hostname
+
+
+def persist_remote_config(destination: Path, payload: bytes) -> None:
+    temporary_path: Path | None = None
+    descriptor: int | None = None
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+        )
+        temporary_path = Path(temporary_name)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, destination)
+        temporary_path = None
+    except OSError as exc:
+        raise RuntimeValidationError(
+            f"could not persist remote configuration to {destination}: {exc}"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def parse_bool_or_auto(value: str) -> bool | Literal["auto"]:

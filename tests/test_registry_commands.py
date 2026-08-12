@@ -50,7 +50,13 @@ def test_registry_flattens_base_and_lora_ids() -> None:
     assert registry.engines["gemma"].backend_url == "http://127.0.0.1:8101"
 
 
-def test_engine_command_is_argv_and_preserves_lora_id() -> None:
+def test_engine_command_is_argv_and_preserves_lora_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "YEETLLM_CONFIG_URL", "https://config.example/config.yaml?token=sensitive"
+    )
+    monkeypatch.setenv("YEETLLM_CONFIG_SHA256", "a" * 64)
     model = lora_config().models[0]
     launch = build_engine_launch(
         model,
@@ -80,6 +86,8 @@ def test_engine_command_is_argv_and_preserves_lora_id() -> None:
         },
     ]
     assert "VLLM_ALLOW_RUNTIME_LORA_UPDATING" not in launch.env
+    assert "YEETLLM_CONFIG_URL" not in launch.env
+    assert "YEETLLM_CONFIG_SHA256" not in launch.env
 
 
 def test_cluster_command_uses_native_mp_and_headless_worker() -> None:

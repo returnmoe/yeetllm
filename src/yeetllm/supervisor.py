@@ -664,6 +664,8 @@ def sanitized_environment() -> dict[str, str]:
     for name in (
         "HF_TOKEN",
         "HUGGING_FACE_HUB_TOKEN",
+        "YEETLLM_CONFIG_URL",
+        "YEETLLM_CONFIG_SHA256",
         "YEETLLM_SSH_AUTHORIZED_KEYS",
         "SSH_PUBLIC_KEY",
         "PUBLIC_KEY",

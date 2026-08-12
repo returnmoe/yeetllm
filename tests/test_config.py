@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 
 from yeetllm.config import RuntimeValidationError, YeetConfig, load_config, validate_runtime
 
@@ -42,6 +45,147 @@ def test_duplicate_yaml_key_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(RuntimeValidationError, match="duplicate key"):
         load_config(path, {})
+
+
+@respx.mock
+def test_https_config_url_is_validated_and_persisted_atomically(tmp_path: Path) -> None:
+    payload = (
+        b"models:\n"
+        b"  - id: remote\n"
+        b"    model: organization/remote\n"
+        b"    gpus: [0]\n"
+    )
+    route = respx.get("https://config.example/yeetllm.yaml").mock(
+        return_value=httpx.Response(200, content=payload)
+    )
+    destination = tmp_path / "nested" / "config.yaml"
+    config = load_config(
+        env={
+            "YEETLLM_CONFIG": str(destination),
+            "YEETLLM_CONFIG_URL": "https://config.example/yeetllm.yaml",
+            "YEETLLM_CONFIG_SHA256": hashlib.sha256(payload).hexdigest(),
+        }
+    )
+
+    assert route.called
+    assert config.models[0].id == "remote"
+    assert destination.read_bytes() == payload
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_config_url_requires_https(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeValidationError, match="must use HTTPS"):
+        load_config(
+            env={
+                "YEETLLM_CONFIG": str(tmp_path / "config.yaml"),
+                "YEETLLM_CONFIG_URL": "http://config.example/yeetllm.yaml",
+            }
+        )
+
+
+@respx.mock
+def test_config_url_error_does_not_reveal_query_string(tmp_path: Path) -> None:
+    query_value = "presigned-sensitive-value"
+    respx.get(f"https://config.example/config.yaml?token={query_value}").mock(
+        return_value=httpx.Response(403)
+    )
+
+    with pytest.raises(RuntimeValidationError) as captured:
+        load_config(
+            env={
+                "YEETLLM_CONFIG": str(tmp_path / "config.yaml"),
+                "YEETLLM_CONFIG_URL": (
+                    f"https://config.example/config.yaml?token={query_value}"
+                ),
+            }
+        )
+    assert "HTTP 403" in str(captured.value)
+    assert query_value not in str(captured.value)
+
+
+@respx.mock
+def test_invalid_remote_config_does_not_replace_last_valid_file(tmp_path: Path) -> None:
+    destination = tmp_path / "config.yaml"
+    destination.write_text("last known valid bytes\n", encoding="utf-8")
+    respx.get("https://config.example/invalid.yaml").mock(
+        return_value=httpx.Response(200, text="models: [")
+    )
+
+    with pytest.raises(RuntimeValidationError, match="invalid YAML"):
+        load_config(
+            env={
+                "YEETLLM_CONFIG": str(destination),
+                "YEETLLM_CONFIG_URL": "https://config.example/invalid.yaml",
+            }
+        )
+    assert destination.read_text(encoding="utf-8") == "last known valid bytes\n"
+
+
+@respx.mock
+def test_config_url_rejects_https_to_http_redirect(tmp_path: Path) -> None:
+    respx.get("https://config.example/redirect").mock(
+        return_value=httpx.Response(302, headers={"location": "http://unsafe.example/config"})
+    )
+
+    with pytest.raises(RuntimeValidationError, match="must use HTTPS"):
+        load_config(
+            env={
+                "YEETLLM_CONFIG": str(tmp_path / "config.yaml"),
+                "YEETLLM_CONFIG_URL": "https://config.example/redirect",
+            }
+        )
+
+
+@respx.mock
+def test_config_url_rejects_digest_mismatch_without_persisting(tmp_path: Path) -> None:
+    destination = tmp_path / "config.yaml"
+    respx.get("https://config.example/config.yaml").mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                "models:\n"
+                "  - id: remote\n"
+                "    model: organization/remote\n"
+                "    gpus: [0]\n"
+            ),
+        )
+    )
+
+    with pytest.raises(RuntimeValidationError, match="SHA256 does not match"):
+        load_config(
+            env={
+                "YEETLLM_CONFIG": str(destination),
+                "YEETLLM_CONFIG_URL": "https://config.example/config.yaml",
+                "YEETLLM_CONFIG_SHA256": "0" * 64,
+            }
+        )
+    assert not destination.exists()
+
+
+@respx.mock
+def test_explicit_config_path_takes_precedence_over_url(tmp_path: Path) -> None:
+    destination = tmp_path / "config.yaml"
+    destination.write_text(
+        "models:\n"
+        "  - id: local\n"
+        "    model: organization/local\n"
+        "    gpus: [0]\n",
+        encoding="utf-8",
+    )
+    route = respx.get("https://config.example/config.yaml").mock(
+        return_value=httpx.Response(500)
+    )
+
+    config = load_config(
+        destination,
+        {
+            "YEETLLM_CONFIG_URL": "https://config.example/config.yaml",
+            "YEETLLM_CONFIG_SHA256": "0" * 64,
+        },
+    )
+
+    assert config.models[0].id == "local"
+    assert not route.called
 
 
 @pytest.mark.parametrize(

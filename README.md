@@ -288,8 +288,9 @@ administrator for the disposable Pod.
    9 GB uncompressed runtime image.
 2. Mount persistent storage at `/workspace`. A Pod volume survives stop/start
    but is deleted with the Pod; a network volume persists independently.
-3. Put `config.yaml` at `/workspace/yeetllm/config.yaml`, or set
-   `YEETLLM_CONFIG` to another YAML path on that volume.
+3. Either put `config.yaml` at `/workspace/yeetllm/config.yaml`, set
+   `YEETLLM_CONFIG` to another path, or set `YEETLLM_CONFIG_URL` to fetch it
+   automatically over HTTPS at every container start.
 4. Add only `22/tcp` to the template's exposed TCP ports. Do not expose 8000 or
    any 810x engine port.
 5. Enable RunPod SSH (`startSsh: true` where that deployment API exposes it) and
@@ -303,6 +304,205 @@ administrator for the disposable Pod.
 RunPod's full SSH variables are `RUNPOD_PUBLIC_IP` and
 `RUNPOD_TCP_PORT_22`. Account keys added after a Pod starts are not guaranteed to
 appear until redeploy; inspect container logs for YeetLLM's selected key source.
+
+### RunPod CLI example
+
+The following script uses the current `runpodctl pod create` interface, fetches
+the YAML from `CONFIG_URL`, requests RunPod-managed SSH setup, exposes only
+`22/tcp`, and also passes the same public key through `SSH_PUBLIC_KEY`. No
+interactive Pod setup or pre-seeded configuration file is required. The network
+volume persists model caches and the validated downloaded configuration.
+
+```bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Required inputs. runpodctl must already be configured with `runpodctl doctor`
+# or `runpodctl config --apiKey ...`.
+GPU_ID="${GPU_ID:?set GPU_ID to a value from: runpodctl gpu list}"
+NETWORK_VOLUME_ID="${NETWORK_VOLUME_ID:?set NETWORK_VOLUME_ID}"
+CONFIG_URL="${CONFIG_URL:?set CONFIG_URL to an HTTPS YAML URL}"
+
+# Optional overrides.
+GPU_COUNT="${GPU_COUNT:-1}"
+IMAGE="${IMAGE:-ghcr.io/returnmoe/yeetllm:development}"
+CONFIG_SHA256="${CONFIG_SHA256:-}"
+SSH_PUBLIC_KEY_FILE="${SSH_PUBLIC_KEY_FILE:-${HOME}/.ssh/id_ed25519.pub}"
+SSH_PRIVATE_KEY_FILE="${SSH_PRIVATE_KEY_FILE:-${SSH_PUBLIC_KEY_FILE%.pub}}"
+
+for required_command in runpodctl jq ssh-keyscan ssh-keygen; do
+  command -v "${required_command}" >/dev/null || {
+    echo "${required_command} is required" >&2
+    exit 1
+  }
+done
+
+# Never print the Pod's env field: it can contain a signed configuration URL or
+# HF_TOKEN. This summary includes only connection and scheduling information.
+print_pod_summary() {
+  jq '{
+    id,
+    name,
+    image: (.image // .imageName),
+    desiredStatus,
+    runtimeStatus,
+    gpuCount,
+    machine,
+    ssh
+  }'
+}
+
+[[ -s "${SSH_PUBLIC_KEY_FILE}" ]] || {
+  echo "missing SSH public key: ${SSH_PUBLIC_KEY_FILE}" >&2
+  exit 1
+}
+[[ "${SSH_PRIVATE_KEY_FILE}" != "${SSH_PUBLIC_KEY_FILE}" ]] || {
+  echo "set SSH_PRIVATE_KEY_FILE explicitly when the public-key path has no .pub suffix" >&2
+  exit 1
+}
+[[ -s "${SSH_PRIVATE_KEY_FILE}" ]] || {
+  echo "missing SSH private key: ${SSH_PRIVATE_KEY_FILE}" >&2
+  exit 1
+}
+ssh-keygen -l -f "${SSH_PUBLIC_KEY_FILE}" >/dev/null || {
+  echo "invalid SSH public key: ${SSH_PUBLIC_KEY_FILE}" >&2
+  exit 1
+}
+[[ "${CONFIG_URL}" == https://* ]] || {
+  echo "CONFIG_URL must use HTTPS" >&2
+  exit 1
+}
+if [[ -n "${CONFIG_SHA256}" && ! "${CONFIG_SHA256}" =~ ^[[:xdigit:]]{64}$ ]]; then
+  echo "CONFIG_SHA256 must be a 64-character hexadecimal digest" >&2
+  exit 1
+fi
+
+# Register the public key with the RunPod account before Pod creation. Never
+# pass the private-key file here.
+runpodctl ssh add-key --key-file "${SSH_PUBLIC_KEY_FILE}"
+ssh_public_key="$(<"${SSH_PUBLIC_KEY_FILE}")"
+pod_env="$(jq -cn \
+  --arg ssh_public_key "${ssh_public_key}" \
+  --arg config_url "${CONFIG_URL}" \
+  --arg config_sha256 "${CONFIG_SHA256}" \
+  '{
+    SSH_PUBLIC_KEY: $ssh_public_key,
+    YEETLLM_SSH_ENABLE: "true",
+    YEETLLM_CONFIG_URL: $config_url
+  } + if $config_sha256 == "" then {} else {
+    YEETLLM_CONFIG_SHA256: $config_sha256
+  } end')"
+
+# --ssh=true sets RunPod's startSsh deployment flag. YeetLLM independently
+# requires the valid public key above before it starts its own hardened sshd.
+pod_json="$(runpodctl pod create \
+  --name yeetllm-development \
+  --image "${IMAGE}" \
+  --gpu-id "${GPU_ID}" \
+  --gpu-count "${GPU_COUNT}" \
+  --cloud-type SECURE \
+  --min-cuda-version 13.0 \
+  --container-disk-in-gb 30 \
+  --network-volume-id "${NETWORK_VOLUME_ID}" \
+  --volume-mount-path /workspace \
+  --ports '22/tcp' \
+  --env "${pod_env}" \
+  --ssh=true \
+  --output=json)"
+
+printf '%s\n' "${pod_json}" | print_pod_summary
+POD_ID="$(jq -er '.id' <<<"${pod_json}")"
+
+# Poll the released CLI until RunPod publishes the SSH mapping and sshd returns
+# host keys. A cold pull of the large upstream vLLM image can take several
+# minutes. The Pod is intentionally left running if this local wait is aborted.
+deadline=$((SECONDS + 1200))
+known_hosts="$(mktemp -t yeetllm-known-hosts.XXXXXX)"
+while ((SECONDS < deadline)); do
+  pod_json="$(runpodctl pod get "${POD_ID}" --output=json)"
+  runtime_status="$(jq -r \
+    '(.runtimeStatus // .desiredStatus // .ssh.status // "unknown") | ascii_downcase' \
+    <<<"${pod_json}")"
+  RUNPOD_PUBLIC_IP="$(jq -r '.ssh.ip // empty' <<<"${pod_json}")"
+  RUNPOD_TCP_PORT_22="$(jq -r '.ssh.port // empty' <<<"${pod_json}")"
+
+  if [[ "${runtime_status}" == "stopped" || "${runtime_status}" == "exited" \
+    || "${runtime_status}" == "terminated" ]]; then
+    printf '%s\n' "${pod_json}" | print_pod_summary >&2
+    echo "Pod stopped before SSH became ready" >&2
+    rm -f -- "${known_hosts}"
+    exit 1
+  fi
+  if [[ -n "${RUNPOD_PUBLIC_IP}" && -n "${RUNPOD_TCP_PORT_22}" ]] \
+    && ssh-keyscan -T 5 -p "${RUNPOD_TCP_PORT_22}" \
+      "${RUNPOD_PUBLIC_IP}" >"${known_hosts}" 2>/dev/null \
+    && [[ -s "${known_hosts}" ]]; then
+    break
+  fi
+  echo "Waiting for SSH on Pod ${POD_ID} (status: ${runtime_status})..." >&2
+  sleep 5
+done
+
+if [[ ! -s "${known_hosts}" ]]; then
+  echo "SSH did not become ready within 20 minutes; Pod ${POD_ID} is still allocated" >&2
+  echo "Inspect it with: runpodctl pod get ${POD_ID}" >&2
+  rm -f -- "${known_hosts}"
+  exit 1
+fi
+
+printf '%s\n' "${pod_json}" | print_pod_summary
+
+console_url="https://console.runpod.io/pods"
+echo
+echo "Pod console: ${console_url}"
+echo "Open Pod ${POD_ID}, select Logs, and inspect the container log for:"
+echo "  [sshd] host public key: ..."
+echo "  [sshd] host fingerprint: ..."
+echo
+echo "Fingerprints presented by the SSH endpoint (UNTRUSTED until compared):"
+ssh-keygen -E sha256 -lf "${known_hosts}"
+echo "Known-hosts file: ${known_hosts}"
+echo
+echo "After verifying that fingerprint, start the tunnel with:"
+printf 'ssh -N -i %q -o UserKnownHostsFile=%q ' \
+  "${SSH_PRIVATE_KEY_FILE}" "${known_hosts}"
+printf -- '-o StrictHostKeyChecking=yes '
+printf -- '-L 8000:127.0.0.1:8000 -p %q root@%q\n' \
+  "${RUNPOD_TCP_PORT_22}" "${RUNPOD_PUBLIC_IP}"
+```
+
+RunPod currently documents Pod container and system logs as a Console feature;
+the current CLI has no supported `runpodctl pod logs` command. Consequently the
+script prints the Pods Console URL and created Pod ID instead of depending on an
+undocumented log endpoint. In the Console, expand the Pod, choose **Logs**,
+select the container log, and save/copy it locally if a log dump is required.
+The lines to retain are the generated host public keys and their `SHA256`
+fingerprints—never a private key.
+
+To verify the endpoint independently before the first SSH connection, scan its
+presented public keys and compare these fingerprints byte-for-byte with the
+Console output:
+
+```bash
+known_hosts="$(mktemp)"
+ssh-keyscan -p "${RUNPOD_TCP_PORT_22}" "${RUNPOD_PUBLIC_IP}" >"${known_hosts}"
+ssh-keygen -E sha256 -lf "${known_hosts}"
+
+# Only after the fingerprints match:
+ssh -N \
+  -i "${SSH_PRIVATE_KEY_FILE}" \
+  -o UserKnownHostsFile="${known_hosts}" \
+  -o StrictHostKeyChecking=yes \
+  -L 8000:127.0.0.1:8000 \
+  -p "${RUNPOD_TCP_PORT_22}" \
+  root@"${RUNPOD_PUBLIC_IP}"
+```
+
+See RunPod's current
+[`runpodctl pod` reference](https://docs.runpod.io/runpodctl/reference/runpodctl-pod),
+[SSH-key setup](https://docs.runpod.io/pods/configuration/use-ssh), and
+[Pod log documentation](https://docs.runpod.io/pods/manage-pods).
 
 Expected listeners on a normal primary Pod:
 
@@ -422,10 +622,38 @@ YeetLLM rejects security/routing/process-owned flags in `extra_args`, including
 host, port, TLS, served name, parallel topology, sleep mode, LoRA mutation, and
 cluster rendezvous flags. Other entries are appended verbatim to the argv array.
 
+### Configuration from an HTTPS URL
+
+Set `YEETLLM_CONFIG_URL` to boot directly from remotely hosted YAML. YeetLLM
+downloads at most 1 MiB with bounded connect/read timeouts, permits only HTTPS
+(including every redirect), keeps TLS certificate verification enabled, applies
+the same safe YAML and schema validation as a local file, and only then
+atomically replaces `YEETLLM_CONFIG`. The default destination remains
+`/workspace/yeetllm/config.yaml`.
+
+```text
+YEETLLM_CONFIG_URL=https://example.com/yeetllm/config.yaml
+YEETLLM_CONFIG_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+`YEETLLM_CONFIG_SHA256` is optional and pins the downloaded bytes. Signed HTTPS
+URLs are supported, but YeetLLM never prints their query strings. Embedded
+`https://user:password@...` credentials are rejected. A failed fetch, digest
+mismatch, or invalid document aborts startup before SSH, the router, or model
+preparation; YeetLLM never silently falls back to a stale local file.
+
+Precedence is: an explicit CLI `--config` path, then `YEETLLM_CONFIG_URL`, then
+the local `YEETLLM_CONFIG` path. When the URL is used, `YEETLLM_CONFIG` is its
+atomic persistence destination. On Instant Clusters, every node uses the same
+URL and the existing configuration-hash check still prevents mismatched engine
+startup.
+
 Simple global environment overrides are intentionally limited:
 
 ```text
 YEETLLM_CONFIG
+YEETLLM_CONFIG_URL
+YEETLLM_CONFIG_SHA256
 YEETLLM_SSH_ENABLE
 YEETLLM_SSH_PORT
 YEETLLM_SSH_AUTHORIZED_KEYS
