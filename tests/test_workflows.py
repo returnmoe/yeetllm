@@ -63,3 +63,12 @@ def test_image_publication_reclaims_runner_disk_before_buildx() -> None:
 
         assert cleanup_index < buildx_index
         assert any(step.get("if") == "always()" for step in steps)
+
+
+def test_remote_smoke_accepts_single_and_multi_platform_metadata() -> None:
+    script = (
+        Path(__file__).parents[1] / "tests" / "docker" / "remote-smoke.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "image_metadata.get(\"config\")" in script
+    assert "image_metadata.get(\"linux/amd64\")" in script

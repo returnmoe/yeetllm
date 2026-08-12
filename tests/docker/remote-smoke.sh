@@ -6,7 +6,7 @@ config_file="$(mktemp)"
 trap 'rm -f "${config_file}"' EXIT
 
 docker buildx imagetools inspect "${image}" \
-  --format '{{json (index .Image "linux/amd64").Config}}' > "${config_file}"
+  --format '{{json .}}' > "${config_file}"
 
 python3 - "${config_file}" "${image}" <<'PY'
 from __future__ import annotations
@@ -17,7 +17,21 @@ from pathlib import Path
 
 config_path = Path(sys.argv[1])
 image = sys.argv[2]
-config = json.loads(config_path.read_text(encoding="utf-8"))
+inspection = json.loads(config_path.read_text(encoding="utf-8"))
+image_metadata = inspection.get("image")
+if not isinstance(image_metadata, dict):
+    raise SystemExit("image inspection did not contain image metadata")
+
+# Buildx reports a direct image object for a single-platform index, but a
+# platform-keyed mapping for multi-platform indexes. Accept both without
+# downloading any filesystem layers.
+if isinstance(image_metadata.get("config"), dict):
+    config = image_metadata["config"]
+else:
+    platform = image_metadata.get("linux/amd64")
+    if not isinstance(platform, dict) or not isinstance(platform.get("config"), dict):
+        raise SystemExit("image inspection did not contain linux/amd64 configuration")
+    config = platform["config"]
 
 expected_entrypoint = ["/usr/bin/tini", "--", "/usr/local/bin/yeetllm-entrypoint"]
 expected_cmd = ["yeetllm", "serve"]
