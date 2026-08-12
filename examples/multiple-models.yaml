@@ -1,0 +1,30 @@
+server:
+  host: 127.0.0.1
+  port: 8000
+
+startup:
+  policy: all
+  parallelism: 1
+
+models:
+  - id: qwen
+    model: Qwen/Qwen3-32B
+    gpus: [0, 1]
+    tensor_parallel_size: 2
+    pipeline_parallel_size: 1
+    dtype: auto
+    quantization: auto
+    gpu_memory_utilization: 0.90
+
+  - id: gemma
+    model: google/gemma-3-27b-it
+    gpus: [2, 3]
+    tensor_parallel_size: 2
+    pipeline_parallel_size: 1
+    dtype: auto
+    quantization: auto
+    gpu_memory_utilization: 0.90
+
+ssh:
+  enable: auto
+  port: 22

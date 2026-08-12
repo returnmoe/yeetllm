@@ -1,0 +1,12 @@
+models:
+  - id: qwen
+    model: Qwen/Qwen3-32B
+    gpus: [0, 1, 2, 3]
+    tensor_parallel_size: 4
+    pipeline_parallel_size: 1
+    dtype: auto
+    quantization: auto
+    gpu_memory_utilization: 0.90
+
+ssh:
+  enable: auto

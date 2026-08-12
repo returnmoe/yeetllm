@@ -1,0 +1,75 @@
+name: GPU integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Commit-derived YeetLLM dev/sha tag or sha256 digest
+        required: true
+        type: string
+      config:
+        description: YAML path below /opt/yeetllm-gpu-configs on the GPU runner
+        required: true
+        type: string
+      expected_models:
+        description: Comma-separated base and/or LoRA model IDs
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: gpu-integration
+  cancel-in-progress: false
+
+jobs:
+  gpu:
+    if: github.ref == 'refs/heads/development'
+    environment: gpu-qualification
+    runs-on: [self-hosted, linux, x64, gpu, yeetllm-ephemeral]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run selected GPU profile
+        env:
+          YEETLLM_CONFIG_INPUT: ${{ inputs.config }}
+          YEETLLM_EXPECT_MODELS: ${{ inputs.expected_models }}
+          YEETLLM_GPU_CONFIG_ROOT: /opt/yeetllm-gpu-configs
+          YEETLLM_IMAGE_INPUT: ${{ inputs.image }}
+        run: |
+          set -Eeuo pipefail
+
+          image_pattern='^ghcr\.io/returnmoe/yeetllm(@sha256:[0-9a-f]{64}|:(dev|sha)-[0-9a-f]{40})$'
+          config_pattern='^/opt/yeetllm-gpu-configs/[A-Za-z0-9._/-]+\.ya?ml$'
+          model_list_pattern='^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127})*$'
+
+          [[ "${YEETLLM_IMAGE_INPUT}" =~ ${image_pattern} ]] || {
+            echo "image must be a commit-derived ghcr.io/returnmoe/yeetllm dev/sha tag or digest" >&2
+            exit 2
+          }
+          [[ "${YEETLLM_CONFIG_INPUT}" =~ ${config_pattern} ]] || {
+            echo "config must be a YAML path below ${YEETLLM_GPU_CONFIG_ROOT}" >&2
+            exit 2
+          }
+          [[ "${YEETLLM_EXPECT_MODELS}" =~ ${model_list_pattern} ]] || {
+            echo "expected_models is not a valid comma-separated model-ID list" >&2
+            exit 2
+          }
+
+          config_root="$(realpath -e -- "${YEETLLM_GPU_CONFIG_ROOT}")"
+          config_file="$(realpath -e -- "${YEETLLM_CONFIG_INPUT}")"
+          [[ -f "${config_file}" && "${config_file}" == "${config_root}/"* ]] || {
+            echo "config must resolve to a regular file within ${config_root}" >&2
+            exit 2
+          }
+
+          tests/gpu/run.sh "${YEETLLM_IMAGE_INPUT}" "${config_file}"

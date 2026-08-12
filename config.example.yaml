@@ -1,0 +1,49 @@
+server:
+  host: 127.0.0.1
+  port: 8000
+
+startup:
+  policy: all
+  parallelism: 1
+
+allow_shared_gpus: false
+
+cluster:
+  mode: auto
+  nccl_socket_ifname: ens1
+  control_port: null
+  rendezvous_port_base: null
+  startup_timeout_seconds: 3600
+
+models:
+  - id: qwen
+    model: Qwen/Qwen3-0.6B
+    revision: null
+    tokenizer: null
+    trust_remote_code: false
+
+    gpus: [0]
+    tensor_parallel_size: 1
+    pipeline_parallel_size: 1
+    distributed_executor_backend: auto
+
+    dtype: auto
+    quantization: auto
+    max_model_len: null
+    gpu_memory_utilization: 0.90
+    kv_cache_dtype: auto
+
+    extra_args: []
+
+    lora:
+      enabled: false
+      max_loras: 1
+      max_lora_rank: 16
+      max_cpu_loras: 1
+      fully_sharded_loras: false
+      adapters: []
+
+ssh:
+  # auto starts sshd only when a valid public key is actually present.
+  enable: auto
+  port: 22

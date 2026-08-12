@@ -1,0 +1,23 @@
+# Use this same file on every node through a RunPod network volume mounted at
+# /workspace. RunPod supplies node/rendezvous variables; YeetLLM validates them.
+cluster:
+  mode: runpod
+  nccl_socket_ifname: ens1
+  startup_timeout_seconds: 3600
+
+models:
+  - id: qwen
+    model: Qwen/Qwen3-235B-A22B
+    # Local physical GPU indices on each node.
+    gpus: [0, 1, 2, 3, 4, 5, 6, 7]
+    # Example for two nodes with eight GPUs each.
+    tensor_parallel_size: 8
+    pipeline_parallel_size: 2
+    distributed_executor_backend: auto
+    dtype: auto
+    quantization: auto
+    gpu_memory_utilization: 0.90
+
+ssh:
+  # Only rank 0 can start SSH, and only when a valid key is detected.
+  enable: auto

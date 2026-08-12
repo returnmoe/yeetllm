@@ -1,0 +1,99 @@
+name: Release image
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build immutable image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build immutable image from the official vLLM base
+        env:
+          REF_VERSION: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          tag="${REF_VERSION}"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid release tag: ${tag}" >&2
+            exit 2
+          fi
+          export YEETLLM_VERSION="${tag#v}"
+          repository="ghcr.io/${REPOSITORY,,}"
+          docker buildx bake -f docker-bake.hcl image \
+            --set "image.tags=${repository}:sha-${REVISION}" \
+            --push
+      - name: Verify immutable image configuration without pulling CUDA layers
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}:sha-${REVISION}"
+          tests/docker/remote-smoke.sh "${image}"
+
+  promote:
+    name: Promote tested aliases
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote tested manifest
+        env:
+          REF_VERSION: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          version="${REF_VERSION#v}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid release version: ${version}" >&2
+            exit 2
+          fi
+          minor="${version%.*}"
+          repository="ghcr.io/${REPOSITORY,,}"
+          source="${repository}:sha-${REVISION}"
+          docker buildx imagetools create \
+            --tag "${repository}:${version}" \
+            --tag "${repository}:${minor}" \
+            --tag "${repository}:latest" \
+            "${source}"
+
+  github-release:
+    name: Create GitHub release
+    needs: promote
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_VERSION: ${{ github.ref_name }}
+        run: |
+          tag="${REF_VERSION}"
+          gh release view "${tag}" >/dev/null 2>&1 \
+            || gh release create "${tag}" --verify-tag --generate-notes

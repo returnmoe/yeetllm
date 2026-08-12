@@ -1,0 +1,22 @@
+models:
+  - id: qwen
+    model: Qwen/Qwen3-32B
+    gpus: [0, 1]
+    tensor_parallel_size: 2
+    pipeline_parallel_size: 1
+
+    lora:
+      enabled: true
+      max_loras: 4
+      max_lora_rank: 64
+      max_cpu_loras: 8
+      fully_sharded_loras: false
+      adapters:
+        # Replace these example repositories with adapters for the configured base.
+        - id: qwen-code
+          model: organization/qwen-code-lora
+        - id: qwen-rp
+          model: organization/qwen-rp-lora
+
+ssh:
+  enable: auto

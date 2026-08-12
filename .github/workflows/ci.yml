@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [development]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Python, shell, and container checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pinned development dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Lint Python
+        run: ruff check .
+      - name: Type check
+        run: mypy
+      - name: Test
+        run: pytest --cov=yeetllm --cov-report=term-missing
+      - name: Lint shell
+        run: shellcheck docker/*.sh tests/docker/*.sh tests/gpu/*.sh
+      - name: Static container security checks
+        run: tests/docker/static.sh
+
+  image-graph:
+    name: Validate thin official-image derivative
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - name: Validate bake graph
+        run: docker buildx bake -f docker-bake.hcl --print
+      - name: Build and validate the small runtime-tools overlay
+        run: docker buildx build --target runtime-tools --output type=cacheonly .
+      - name: Resolve the complete image without exporting CUDA layers
+        run: docker buildx bake -f docker-bake.hcl image --set image.output=type=cacheonly
