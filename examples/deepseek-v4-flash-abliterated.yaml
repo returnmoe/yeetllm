@@ -1,5 +1,6 @@
-# Reference configuration for two 96 GB RTX Pro 6000 Blackwell GPUs. The model
-# repository reports roughly 170 GB total VRAM use at this context length.
+# Conservative target-only smoke-test configuration for two 96 GB RTX PRO 6000
+# Blackwell GPUs. The checkpoint is 163.49 GiB on disk; use at least a 250 GB
+# persistent volume. Raise max_model_len only after this configuration is ready.
 server:
   host: 127.0.0.1
   port: 8000
@@ -9,9 +10,9 @@ startup:
   parallelism: 1
 
 models:
-  - id: deepseek-v4-flash-abliterated
-    model: fraserprice/DeepSeek-V4-Flash-Abliterated
-    trust_remote_code: false
+  - id: deepseek-v4-flash-0731-abliterated
+    model: sakamakismile/DeepSeek-V4-Flash-0731-Abliterated-NVFP4
+    trust_remote_code: true
 
     gpus: [0, 1]
     tensor_parallel_size: 2
@@ -19,22 +20,24 @@ models:
     distributed_executor_backend: auto
 
     dtype: auto
-    # Let vLLM read the checkpoint's DeepSeek-V4 FP4/FP8 metadata.
+    # Let vLLM read the checkpoint's mixed NVFP4/FP8 metadata.
     quantization: auto
-    max_model_len: 262144
-    gpu_memory_utilization: 0.92
+    max_model_len: 4096
+    gpu_memory_utilization: 0.88
     kv_cache_dtype: fp8
 
     extra_args:
+      # Keep the first launch conservative and debuggable. Remove this only
+      # after target-only generation succeeds on the selected GPU topology.
+      - --enforce-eager
       - --max-num-seqs
-      - "128"
+      - "1"
       - --max-num-batched-tokens
       - "4096"
       - --tokenizer-mode
       - deepseek_v4
       - --block-size
       - "256"
-      - --async-scheduling
       - --enable-chunked-prefill
       - --enable-prefix-caching
       - --reasoning-parser
@@ -45,10 +48,11 @@ models:
       - --default-chat-template-kwargs.thinking=true
       - --default-chat-template-kwargs.reasoning_effort=high
 
-      # Optional MTP speculative decoding. Enable only after the base setup is
-      # proven on your selected GPU type.
+      # Optional three-stage DSpark speculative decoding. The drafter is
+      # already included and abliterated in this checkpoint. Enable only after
+      # target-only serving works and confirm that it still fits in VRAM.
       # - --speculative-config
-      # - '{"method":"mtp","num_speculative_tokens":2,"draft_sample_method":"probabilistic"}'
+      # - '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"greedy"}'
 
 ssh:
   # sshd starts only when one of YeetLLM's supported public-key sources exists.

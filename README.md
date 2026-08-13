@@ -137,8 +137,10 @@ count (or the total count across nodes in an Instant Cluster).
 
 For a concrete two-GPU DeepSeek V4 example, see
 [`examples/deepseek-v4-flash-abliterated.yaml`](examples/deepseek-v4-flash-abliterated.yaml).
-It targets two 96 GB RTX Pro 6000 Blackwell GPUs and leaves the checkpoint's
-mixed FP4/FP8 format on vLLM's metadata-driven `quantization: auto` path.
+It targets the 0731 abliterated NVFP4 checkpoint on two 96 GB RTX PRO 6000
+Blackwell GPUs. The example deliberately starts with a 4K context, eager
+execution, and target-only decoding; increase context and enable the included
+DSpark drafter only after the conservative configuration is serving correctly.
 
 ## LoRA adapters
 
