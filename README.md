@@ -150,6 +150,14 @@ When a two-B200 allocation is unavailable, the sibling
 targets one 288 GB B300 with TP=1. That leaves substantially more single-GPU
 runtime headroom than attempting to fit the checkpoint on one 180 GB B200.
 
+If datacenter Blackwell is unavailable, the separate
+[`examples/deepseek-v4-flash-abliterated-h200.yaml`](examples/deepseek-v4-flash-abliterated-h200.yaml)
+targets two 141 GB H200 SXM GPUs with TP=2. It switches to the 167 GB native
+mixed-FP8 `apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8` checkpoint because
+the NVFP4 example is not a drop-in Hopper deployment. Its first boot excludes
+expert parallelism, prefix caching and DSpark so basic generation can be
+validated before adding independent optimization paths.
+
 ## LoRA adapters
 
 Static LoRA loading is enabled per base engine:

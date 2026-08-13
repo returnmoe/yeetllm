@@ -1,0 +1,58 @@
+# Conservative smoke-test configuration for two 141 GB H200 SXM GPUs. This
+# uses the 167 GB native mixed-FP8 0731 checkpoint, not the NVFP4 checkpoint
+# used by the B200/B300 examples. Use at least a 250 GB persistent volume.
+# Raise max_model_len only after this configuration is ready.
+server:
+  host: 127.0.0.1
+  port: 8000
+
+startup:
+  policy: all
+  parallelism: 1
+
+models:
+  - id: deepseek-v4-flash-0731-abliterated
+    model: apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8
+    trust_remote_code: true
+
+    gpus: [0, 1]
+    tensor_parallel_size: 2
+    pipeline_parallel_size: 1
+    distributed_executor_backend: auto
+
+    dtype: auto
+    # Let vLLM read the checkpoint's native mixed-FP8 metadata.
+    quantization: auto
+    max_model_len: 4096
+    gpu_memory_utilization: 0.90
+    kv_cache_dtype: fp8
+
+    extra_args:
+      # Keep the first launch conservative and debuggable. Remove eager mode
+      # only after target-only generation succeeds.
+      - --enforce-eager
+      - --max-num-seqs
+      - "1"
+      - --max-num-batched-tokens
+      - "4096"
+      - --tokenizer-mode
+      - deepseek_v4
+      - --block-size
+      - "256"
+      - --enable-chunked-prefill
+      - --reasoning-parser
+      - deepseek_v4
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - deepseek_v4
+      - --default-chat-template-kwargs.thinking=true
+      - --default-chat-template-kwargs.reasoning_effort=high
+
+      # Expert parallelism, prefix caching and DSpark speculative decoding are
+      # intentionally excluded from the first H200 launch. Add and validate
+      # them independently only after basic generation works.
+
+ssh:
+  # sshd starts only when one of YeetLLM's supported public-key sources exists.
+  enable: auto
+  port: 22
