@@ -145,6 +145,11 @@ included DSpark drafter only after the conservative configuration is serving
 correctly. It intentionally leaves B200's GPU interconnect enabled rather than
 applying the PCIe-only workarounds previously required for RTX PRO 6000.
 
+When a two-B200 allocation is unavailable, the sibling
+[`examples/deepseek-v4-flash-abliterated-b300.yaml`](examples/deepseek-v4-flash-abliterated-b300.yaml)
+targets one 288 GB B300 with TP=1. That leaves substantially more single-GPU
+runtime headroom than attempting to fit the checkpoint on one 180 GB B200.
+
 ## LoRA adapters
 
 Static LoRA loading is enabled per base engine:
