@@ -581,8 +581,8 @@ The image sets:
 HF_HOME=/workspace/yeetllm/cache/huggingface
 HUGGINGFACE_HUB_CACHE=/workspace/yeetllm/cache/huggingface/hub
 VLLM_CACHE_ROOT=/workspace/yeetllm/cache/vllm
-TRITON_CACHE_DIR=/workspace/yeetllm/cache/vllm/triton
-TORCHINDUCTOR_CACHE_DIR=/workspace/yeetllm/cache/vllm/torchinductor
+TRITON_CACHE_DIR=/workspace/yeetllm/cache/vllm/triton-v0.27.0
+TORCHINDUCTOR_CACHE_DIR=/workspace/yeetllm/cache/vllm/torchinductor-v0.27.0
 ```
 
 Additional persistent locations are `/workspace/yeetllm/models` and

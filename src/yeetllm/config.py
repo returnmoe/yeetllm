@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -585,13 +586,49 @@ def discover_gpu_count() -> int:
 
 
 def installed_quantization_methods() -> set[str] | None:
+    # Importing vLLM can initialize TorchInductor cache state. The supervisor
+    # runs as root so it can prepare SSH and mounted volumes, while engines run
+    # as the unprivileged vllm account. Probe in a service-user subprocess to
+    # prevent root-owned compile-cache entries from poisoning engine startup.
+    marker = "__YEETLLM_QUANTIZATION_METHODS__="
+    script = (
+        "import json; "
+        "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS; "
+        f"print({marker!r} + json.dumps(sorted(QUANTIZATION_METHODS)))"
+    )
+    environment = dict(os.environ)
+    if os.geteuid() == 0:
+        environment["HOME"] = "/home/vllm"
+        environment["USER"] = "vllm"
     try:
-        from vllm.model_executor.layers.quantization import (  # type: ignore[import-not-found]
-            QUANTIZATION_METHODS,
+        from yeetllm.processes import service_argv
+
+        result = subprocess.run(  # noqa: S603 - fixed interpreter and source
+            service_argv([sys.executable, "-c", script]),
+            check=True,
+            capture_output=True,
+            env=environment,
+            text=True,
+            timeout=30,
         )
-    except ImportError:
+    except (
+        FileNotFoundError,
+        KeyError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         return None
-    return set(QUANTIZATION_METHODS)
+    for line in reversed(result.stdout.splitlines()):
+        if not line.startswith(marker):
+            continue
+        try:
+            methods = json.loads(line.removeprefix(marker))
+        except json.JSONDecodeError:
+            return None
+        if isinstance(methods, list) and all(isinstance(item, str) for item in methods):
+            return set(methods)
+        return None
+    return None
 
 
 def validate_runtime(

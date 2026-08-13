@@ -6,6 +6,12 @@ umask 022
 vllm_uid="$(id -u vllm)"
 vllm_gid="$(id -g vllm)"
 
+# These paths are part of YeetLLM's privilege boundary. Do not accept global
+# environment overrides that could make root repair an arbitrary directory.
+export VLLM_CACHE_ROOT=/workspace/yeetllm/cache/vllm
+export TRITON_CACHE_DIR=/workspace/yeetllm/cache/vllm/triton-v0.27.0
+export TORCHINDUCTOR_CACHE_DIR=/workspace/yeetllm/cache/vllm/torchinductor-v0.27.0
+
 as_vllm() {
   /usr/bin/setpriv \
     "--reuid=${vllm_uid}" \
@@ -60,8 +66,11 @@ if ! getent passwd sshd >/dev/null; then
 fi
 
 for directory in \
+  /workspace/yeetllm/cache \
   /workspace/yeetllm/cache/huggingface \
   /workspace/yeetllm/cache/vllm \
+  "${TRITON_CACHE_DIR}" \
+  "${TORCHINDUCTOR_CACHE_DIR}" \
   /workspace/yeetllm/models \
   /workspace/yeetllm/quantized; do
   prepare_persistent_directory "${directory}"

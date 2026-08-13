@@ -57,6 +57,7 @@ def test_engine_command_is_argv_and_preserves_lora_id(
         "YEETLLM_CONFIG_URL", "https://config.example/config.yaml?token=sensitive"
     )
     monkeypatch.setenv("YEETLLM_CONFIG_SHA256", "a" * 64)
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", "/untrusted-cache-override")
     model = lora_config().models[0]
     launch = build_engine_launch(
         model,
@@ -76,6 +77,11 @@ def test_engine_command_is_argv_and_preserves_lora_id(
     assert launch.env["HF_HOME"] == "/workspace/yeetllm/cache/huggingface"
     assert launch.env["HUGGINGFACE_HUB_CACHE"] == (
         "/workspace/yeetllm/cache/huggingface/hub"
+    )
+    assert launch.env["VLLM_CACHE_ROOT"] == "/workspace/yeetllm/cache/vllm"
+    assert launch.env["TRITON_CACHE_DIR"].endswith("/triton-v0.27.0")
+    assert launch.env["TORCHINDUCTOR_CACHE_DIR"].endswith(
+        "/torchinductor-v0.27.0"
     )
     assert launch.argv[launch.argv.index("--host") + 1] == "127.0.0.1"
     lora_index = launch.argv.index("--lora-modules")

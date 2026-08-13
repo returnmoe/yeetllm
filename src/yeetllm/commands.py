@@ -9,6 +9,11 @@ from yeetllm.cluster import ClusterInfo, cluster_environment
 from yeetllm.config import ModelConfig
 
 PERSISTENT_MODEL_DOWNLOAD_DIR = "/workspace/yeetllm/cache/huggingface/hub"
+PERSISTENT_VLLM_CACHE_DIR = "/workspace/yeetllm/cache/vllm"
+PERSISTENT_TRITON_CACHE_DIR = f"{PERSISTENT_VLLM_CACHE_DIR}/triton-v0.27.0"
+PERSISTENT_TORCHINDUCTOR_CACHE_DIR = (
+    f"{PERSISTENT_VLLM_CACHE_DIR}/torchinductor-v0.27.0"
+)
 
 
 @dataclass(frozen=True)
@@ -121,7 +126,9 @@ def build_engine_launch(
         env.pop(name, None)
     env["HF_HOME"] = "/workspace/yeetllm/cache/huggingface"
     env["HUGGINGFACE_HUB_CACHE"] = PERSISTENT_MODEL_DOWNLOAD_DIR
-    env["VLLM_CACHE_ROOT"] = "/workspace/yeetllm/cache/vllm"
+    env["VLLM_CACHE_ROOT"] = PERSISTENT_VLLM_CACHE_DIR
+    env["TRITON_CACHE_DIR"] = PERSISTENT_TRITON_CACHE_DIR
+    env["TORCHINDUCTOR_CACHE_DIR"] = PERSISTENT_TORCHINDUCTOR_CACHE_DIR
     env.setdefault("PYTHONUNBUFFERED", "1")
     return EngineLaunch(argv=argv, env=env)
 

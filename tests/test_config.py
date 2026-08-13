@@ -1,13 +1,54 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from yeetllm.config import RuntimeValidationError, YeetConfig, load_config, validate_runtime
+from yeetllm.config import (
+    RuntimeValidationError,
+    YeetConfig,
+    installed_quantization_methods,
+    load_config,
+    validate_runtime,
+)
+
+
+def test_quantization_probe_runs_as_service_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_service_argv(argv: list[str]) -> list[str]:
+        captured["probe"] = argv
+        return ["service-user", *argv]
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["launch"] = argv
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=(
+                "vLLM diagnostic\n"
+                '__YEETLLM_QUANTIZATION_METHODS__=["awq", "fp8"]\n'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("yeetllm.processes.service_argv", fake_service_argv)
+    monkeypatch.setattr("yeetllm.config.subprocess.run", fake_run)
+
+    assert installed_quantization_methods() == {"awq", "fp8"}
+    assert captured["probe"][:2] == [sys.executable, "-c"]
+    assert captured["launch"][0] == "service-user"
+    assert isinstance(captured["kwargs"], dict)
+    assert "env" in captured["kwargs"]
 
 
 def test_safe_yaml_and_environment_override(tmp_path: Path) -> None:

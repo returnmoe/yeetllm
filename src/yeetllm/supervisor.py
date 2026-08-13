@@ -19,7 +19,12 @@ from yeetllm.cluster import (
     poll_coordinator,
     validate_cluster_ports,
 )
-from yeetllm.commands import PERSISTENT_MODEL_DOWNLOAD_DIR, build_engine_launch
+from yeetllm.commands import (
+    PERSISTENT_MODEL_DOWNLOAD_DIR,
+    PERSISTENT_TORCHINDUCTOR_CACHE_DIR,
+    PERSISTENT_TRITON_CACHE_DIR,
+    build_engine_launch,
+)
 from yeetllm.config import (
     YeetConfig,
     discover_gpu_count,
@@ -34,8 +39,11 @@ from yeetllm.ssh import SSHLaunch, prepare_ssh
 from yeetllm.state import DEFAULT_STATE_PATH, StateStore
 
 PERSISTENT_DIRECTORIES = (
+    Path("/workspace/yeetllm/cache"),
     Path("/workspace/yeetllm/cache/huggingface"),
     Path("/workspace/yeetllm/cache/vllm"),
+    Path(PERSISTENT_TRITON_CACHE_DIR),
+    Path(PERSISTENT_TORCHINDUCTOR_CACHE_DIR),
     Path("/workspace/yeetllm/models"),
     Path("/workspace/yeetllm/quantized"),
 )
@@ -65,8 +73,8 @@ class Supervisor:
         self._had_failure = False
 
     async def run(self) -> int:
-        self._validate()
         self._prepare_directories()
+        self._validate()
         self._initialize_state()
         self._install_signal_handlers()
         self._print_summary()
