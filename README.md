@@ -137,12 +137,13 @@ count (or the total count across nodes in an Instant Cluster).
 
 For a concrete two-GPU DeepSeek V4 example, see
 [`examples/deepseek-v4-flash-abliterated.yaml`](examples/deepseek-v4-flash-abliterated.yaml).
-It targets the 0731 abliterated NVFP4 checkpoint on two 96 GB RTX PRO 6000
-Blackwell GPUs. The example deliberately starts with a 4K context, eager
-execution, target-only decoding, and the checkpoint author's required
-no-NVLink fallbacks (`NCCL_P2P_DISABLE=1` and
-`--disable-custom-all-reduce`); increase context and enable the included DSpark
-drafter only after the conservative configuration is serving correctly.
+It targets the 0731 abliterated NVFP4 checkpoint on two 180 GB B200 GPUs. The
+checkpoint is too close to a single B200's capacity to leave safe room for vLLM
+workspaces and KV cache. The example deliberately starts with a 4K context,
+eager execution, and target-only decoding; increase context and enable the
+included DSpark drafter only after the conservative configuration is serving
+correctly. It intentionally leaves B200's GPU interconnect enabled rather than
+applying the PCIe-only workarounds previously required for RTX PRO 6000.
 
 ## LoRA adapters
 

@@ -1,6 +1,7 @@
-# Conservative target-only smoke-test configuration for two 96 GB RTX PRO 6000
-# Blackwell GPUs. The checkpoint is 163.49 GiB on disk; use at least a 250 GB
-# persistent volume. Raise max_model_len only after this configuration is ready.
+# Conservative smoke-test configuration for two 180 GB B200 GPUs. The
+# checkpoint is 163.49 GiB on disk; use at least a 250 GB persistent volume.
+# A single B200 leaves too little practical headroom for vLLM workspaces and KV
+# cache. Raise max_model_len only after this configuration is ready.
 server:
   host: 127.0.0.1
   port: 8000
@@ -23,19 +24,13 @@ models:
     # Let vLLM read the checkpoint's mixed NVFP4/FP8 metadata.
     quantization: auto
     max_model_len: 4096
-    gpu_memory_utilization: 0.88
+    gpu_memory_utilization: 0.90
     kv_cache_dtype: fp8
-
-    # This checkpoint's verified no-NVLink topology required NCCL's PCIe-safe
-    # fallback together with vLLM's custom-all-reduce disable flag below.
-    environment:
-      NCCL_P2P_DISABLE: "1"
 
     extra_args:
       # Keep the first launch conservative and debuggable. Remove this only
-      # after target-only generation succeeds on the selected GPU topology.
+      # after generation succeeds on the selected GPU topology.
       - --enforce-eager
-      - --disable-custom-all-reduce
       - --max-num-seqs
       - "1"
       - --max-num-batched-tokens
