@@ -307,6 +307,33 @@ def test_controlled_extra_argument_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
+    "environment, message",
+    [
+        ({"lowercase": "1"}, "uppercase shell-name syntax"),
+        ({"CUDA_VISIBLE_DEVICES": "7"}, "controlled by YeetLLM"),
+        ({"HF_TOKEN": "secret"}, "supplied as a secret outside YAML"),
+        ({"NCCL_P2P_DISABLE": "bad\x00value"}, "contains a NUL byte"),
+    ],
+)
+def test_model_environment_rejects_unsafe_entries(
+    environment: dict[str, str], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        YeetConfig.model_validate(
+            {
+                "models": [
+                    {
+                        "id": "base",
+                        "model": "org/base",
+                        "gpus": [0],
+                        "environment": environment,
+                    }
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize(
     "argument",
     [
         "-tp=2",

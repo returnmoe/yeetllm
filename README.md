@@ -139,8 +139,10 @@ For a concrete two-GPU DeepSeek V4 example, see
 [`examples/deepseek-v4-flash-abliterated.yaml`](examples/deepseek-v4-flash-abliterated.yaml).
 It targets the 0731 abliterated NVFP4 checkpoint on two 96 GB RTX PRO 6000
 Blackwell GPUs. The example deliberately starts with a 4K context, eager
-execution, and target-only decoding; increase context and enable the included
-DSpark drafter only after the conservative configuration is serving correctly.
+execution, target-only decoding, and the checkpoint author's required
+no-NVLink fallbacks (`NCCL_P2P_DISABLE=1` and
+`--disable-custom-all-reduce`); increase context and enable the included DSpark
+drafter only after the conservative configuration is serving correctly.
 
 ## LoRA adapters
 
@@ -656,6 +658,9 @@ Per-model fields map closely to current vLLM arguments:
   scheduler does not honor this appliance's physical per-engine GPU mapping)
 - `dtype`, `quantization`, `max_model_len`
 - `gpu_memory_utilization`, `kv_cache_dtype`
+- `environment`, a model-scoped string mapping for runtime tuning such as
+  `NCCL_P2P_DISABLE`; GPU isolation, cache paths, cluster networking and secrets
+  remain controlled by YeetLLM
 - `lora.enabled`, `max_loras`, `max_lora_rank`, `max_cpu_loras`,
   `fully_sharded_loras`, and static `adapters`
 - `extra_args`, an argv list for new vLLM options

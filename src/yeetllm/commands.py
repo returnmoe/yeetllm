@@ -105,6 +105,9 @@ def build_engine_launch(
     argv.extend(model.extra_args)
 
     env = dict(os.environ)
+    # Model-scoped runtime tuning belongs in the portable YAML, but YeetLLM's
+    # cluster, GPU-isolation, cache and security values below remain authoritative.
+    env.update(model.environment)
     env.update(cluster_environment(cluster))
     env["CUDA_VISIBLE_DEVICES"] = ",".join(str(index) for index in model.gpus)
     env.pop("VLLM_ALLOW_RUNTIME_LORA_UPDATING", None)

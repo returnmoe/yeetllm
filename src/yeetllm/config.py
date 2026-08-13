@@ -20,6 +20,22 @@ DEFAULT_CONFIG_PATH = Path("/workspace/yeetllm/config.yaml")
 MAX_REMOTE_CONFIG_BYTES = 1024 * 1024
 MAX_REMOTE_CONFIG_REDIRECTS = 5
 MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$")
+MODEL_ENVIRONMENT_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+BLOCKED_MODEL_ENVIRONMENT = {
+    "CUDA_VISIBLE_DEVICES",
+    "HF_HOME",
+    "HUGGINGFACE_HUB_CACHE",
+    "HOME",
+    "NCCL_SOCKET_IFNAME",
+    "PATH",
+    "PYTHONPATH",
+    "TORCHINDUCTOR_CACHE_DIR",
+    "TRITON_CACHE_DIR",
+    "USER",
+    "VLLM_ALLOW_RUNTIME_LORA_UPDATING",
+    "VLLM_CACHE_ROOT",
+    "VLLM_HOST_IP",
+}
 BLOCKED_EXTRA_ARGS = {
     "-n",
     "-dp",
@@ -217,6 +233,7 @@ class ModelConfig(StrictModel):
     max_model_len: int | None = Field(default=None, ge=1)
     gpu_memory_utilization: float = Field(default=0.9, gt=0, le=1)
     kv_cache_dtype: str = "auto"
+    environment: dict[str, str] = Field(default_factory=dict)
     extra_args: list[str] = Field(default_factory=list)
     lora: LoRAConfig = Field(default_factory=LoRAConfig)
 
@@ -242,6 +259,25 @@ class ModelConfig(StrictModel):
         if len(value) != len(set(value)):
             raise ValueError("GPU indices may not repeat within one model")
         return value
+
+    @field_validator("environment")
+    @classmethod
+    def validate_environment(cls, values: dict[str, str]) -> dict[str, str]:
+        for name, value in values.items():
+            if not MODEL_ENVIRONMENT_NAME_PATTERN.fullmatch(name):
+                raise ValueError(
+                    f"environment variable {name!r} must use uppercase shell-name syntax"
+                )
+            if name in BLOCKED_MODEL_ENVIRONMENT or any(
+                marker in name for marker in ("KEY", "PASSWORD", "SECRET", "TOKEN")
+            ):
+                raise ValueError(
+                    f"environment variable {name} is controlled by YeetLLM or must "
+                    "be supplied as a secret outside YAML"
+                )
+            if "\x00" in value:
+                raise ValueError(f"environment variable {name} contains a NUL byte")
+        return values
 
     @field_validator("extra_args")
     @classmethod

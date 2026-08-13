@@ -121,6 +121,26 @@ def test_cluster_command_uses_native_mp_and_headless_worker() -> None:
     assert launch.env["VLLM_HOST_IP"] == "10.0.0.2"
 
 
+def test_model_environment_is_applied_without_overriding_isolation() -> None:
+    model = lora_config().models[0].model_copy(
+        update={
+            "environment": {
+                "NCCL_P2P_DISABLE": "1",
+                "VLLM_USE_DEEP_GEMM": "0",
+            }
+        }
+    )
+    launch = build_engine_launch(
+        model,
+        port=8100,
+        cluster=ClusterInfo(enabled=False, role="primary"),
+        model_index=0,
+    )
+    assert launch.env["NCCL_P2P_DISABLE"] == "1"
+    assert launch.env["VLLM_USE_DEEP_GEMM"] == "0"
+    assert launch.env["CUDA_VISIBLE_DEVICES"] == "2,3"
+
+
 @pytest.mark.parametrize("server_port, ssh_port", [(8100, 22), (8000, 8000)])
 def test_listener_port_collisions_are_rejected(server_port: int, ssh_port: int) -> None:
     config = YeetConfig.model_validate(

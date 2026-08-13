@@ -33,6 +33,7 @@ models:
     gpu_memory_utilization: 0.90
     kv_cache_dtype: auto
 
+    environment: {}
     extra_args: []
 
     lora:

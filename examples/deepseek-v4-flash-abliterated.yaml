@@ -26,10 +26,16 @@ models:
     gpu_memory_utilization: 0.88
     kv_cache_dtype: fp8
 
+    # This checkpoint's verified no-NVLink topology required NCCL's PCIe-safe
+    # fallback together with vLLM's custom-all-reduce disable flag below.
+    environment:
+      NCCL_P2P_DISABLE: "1"
+
     extra_args:
       # Keep the first launch conservative and debuggable. Remove this only
       # after target-only generation succeeds on the selected GPU topology.
       - --enforce-eager
+      - --disable-custom-all-reduce
       - --max-num-seqs
       - "1"
       - --max-num-batched-tokens
